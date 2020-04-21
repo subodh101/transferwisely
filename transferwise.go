@@ -1,18 +1,19 @@
 package main
 
 import (
-    "bytes"
-    "encoding/json"
-    "fmt"
-    "github.com/google/uuid"
-    "github.com/mitchellh/mapstructure"
-    "log"
-    "net/http"
-    "net/url"
-    "os"
-    "strconv"
-    "strings"
-    "time"
+  "bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/mitchellh/mapstructure"
 )
 
 // transfer-wise api paths
@@ -47,12 +48,17 @@ var hostVar      = getHost(envVar)
 var apiTokenVar  = getEnv("API_TOKEN", "")
 var marginVar    = getEnv("MARGIN", fallbackMargin)
 var intervalVar  = getEnv("INTERVAL", fallbackInterval)
+var lastTransTime = time.Now()
 
 func checkAndProcess() {
     if hostVar == "" || apiTokenVar == "" {
         log.Println(ErrEnvVarMissingOrInvalid)
         return
     }
+
+    if time.Now().Sub(lastTransTime).Hours() >= 48 {
+		// send mail
+	  }
 
     result, transfer, liveRate, err := compareRates()
     if err != nil {
@@ -71,6 +77,7 @@ func checkAndProcess() {
         return
     }
 
+    lastTransTime = time.Now()
     log.Printf("|| NEW TRANSFER BOOKED || Transfer ID: %v | {%v} --> {%v} | Rate: %v |  Amount: %v ||",
         newTransfer.Id, newTransfer.SourceCurrency, newTransfer.TargetCurrency, newTransfer.Rate, newTransfer.SourceAmount)
 }
