@@ -63,93 +63,101 @@ func init() {
 	Client = &http.Client{Timeout: 10 * time.Second}
 }
 
-func checkAndProcess() {
-	if hostVar == "" || apiTokenVar == "" {
-		log.Println(ErrEnvVarMissingOrInvalid)
-		return
+func getTransfer() ([]Transfer, error) {
+	// Filter specifically for transfers waiting for funds
+	params := url.Values{
+		"limit":  {"2"},
+		"offset": {"0"},
+		"status": {"incoming_payment_waiting"},
 	}
-
-	result, transfer, liveRate, err := compareRates()
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	if !result {
-		log.Printf("|| NO ACTION NEEDED, Live Rate: %v || Transfer ID: %v | {%v} --> {%v} | Booked Rate: %v | Amount: %v ||",
-			liveRate, transfer.Id, transfer.SourceCurrency, transfer.TargetCurrency, transfer.Rate, transfer.SourceAmount)
-		return
-	}
-
-	newTransfer, err := createTransfer(transfer)
-	if err != nil || !result {
-		log.Println(err)
-		return
-	}
-
-	// Change this line in checkAndProcess:
-	log.Printf("|| NEW TRANSFER BOOKED || ID: %v | Target: %v %v | New Cost: %v %v (Saved: %v %v) ||",
-		newTransfer.Id,
-		newTransfer.TargetAmount, newTransfer.TargetCurrency,
-		newTransfer.SourceAmount, newTransfer.SourceCurrency,
-		transfer.SourceAmount-newTransfer.SourceAmount, newTransfer.SourceCurrency) // Use 'transfer'
-}
-
-func compareRates() (result bool, bookedTransfer Transfer, currentRate float64, err error) {
-	empty := Transfer{}
-	bookedTransfer, err = getBookedTransfer()
-	if err != nil || bookedTransfer == empty {
-		return false, empty, 0, fmt.Errorf("compareRates: %v", err)
-	}
-
-	liveRate, err := getLiveRate(bookedTransfer.SourceCurrency, bookedTransfer.TargetCurrency)
-	if err != nil || liveRate == 0 {
-		return false, empty, 0, fmt.Errorf("compareRates: %v", err)
-	}
-
-	marginRate, err := strconv.ParseFloat(marginVar, 64)
-	if err != nil {
-		return false, empty, 0, fmt.Errorf("compareRates: %v", err)
-	}
-
-	bookedRate := bookedTransfer.Rate
-	if liveRate > bookedRate && (liveRate-bookedRate >= marginRate) {
-		return true, bookedTransfer, 0, nil
-	}
-
-	return false, bookedTransfer, liveRate, nil
-}
-
-func getBookedTransfer() (Transfer, error) {
-	params := url.Values{"limit": {"3"}, "offset": {"0"}, "status": {"incoming_payment_waiting"}}
 	url := &url.URL{RawQuery: params.Encode(), Host: hostVar, Scheme: "https", Path: transfersAPIPath}
 
 	response, code, err := callExternalAPI(http.MethodGet, url.String(), nil)
 	if err != nil || code != http.StatusOK {
-		return Transfer{}, fmt.Errorf("error GET transfer list API: %v : %v", code, err)
+		return nil, fmt.Errorf("error GET transfer list API: %v : %v", code, err)
 	}
 
 	var transfersList []Transfer
 	err = mapstructure.Decode(response, &transfersList)
 	if err != nil {
-		return Transfer{}, fmt.Errorf("error decoding response: %v", err)
+		return nil, fmt.Errorf("error decoding response: %v", err)
 	}
 
 	if len(transfersList) == 0 {
-		return Transfer{}, fmt.Errorf(ErrNoCurrentTransferFound)
+		return nil, fmt.Errorf(ErrNoCurrentTransferFound)
 	}
 
-	bookedTransfer := findBestTransfer(transfersList)
-	quoteDetail, err := getDetailByQuoteId(bookedTransfer.QuoteUuid)
+	// Enrich each transfer with Quote details (Profile and Amounts)
+	for i := range transfersList {
+		quoteDetail, err := getDetailByQuoteId(transfersList[i].QuoteUuid)
+		if err != nil {
+			log.Printf("Warning: could not get quote details for transfer %d: %v", transfersList[i].Id, err)
+			continue
+		}
+		transfersList[i].SourceAmount = quoteDetail.SourceAmount
+		transfersList[i].TargetAmount = quoteDetail.TargetAmount
+		transfersList[i].Profile = quoteDetail.Profile
+	}
+
+	return transfersList, nil
+}
+
+func checkAndProcess() {
+	if envVar == "" || apiTokenVar == "" {
+		log.Println(ErrEnvVarMissingOrInvalid)
+		return
+	}
+
+	// 1. Get all transfers
+	transfers, err := getTransfer()
 	if err != nil {
-		return Transfer{}, fmt.Errorf("getBookedTransfer: %v", err)
+		log.Println(err)
+		return
 	}
 
-	// CRITICAL: We now save the TargetAmount (e.g., 25,000 INR)
-	bookedTransfer.SourceAmount = quoteDetail.SourceAmount
-	bookedTransfer.TargetAmount = quoteDetail.TargetAmount
-	bookedTransfer.Profile = quoteDetail.Profile
+	if len(transfers) == 0 {
+		log.Println(ErrNoCurrentTransferFound)
+		return
+	}
 
-	return bookedTransfer, nil
+	// 2. Create a map to cache rates for this cycle
+	// Key format: "SOURCE-TARGET" (e.g., "JPY-INR")
+	rateCache := make(map[string]float64)
+	margin, _ := strconv.ParseFloat(marginVar, 64)
+
+	for _, transfer := range transfers {
+		// This now works because we added 'Status' to the struct above
+		if transfer.Status != "outgoing_payment_sent" &&
+			transfer.Status != "booked" &&
+			transfer.Status != "incoming_payment_waiting" {
+			continue
+		}
+
+		currencyPair := fmt.Sprintf("%s-%s", transfer.SourceCurrency, transfer.TargetCurrency)
+
+		currentRate, exists := rateCache[currencyPair]
+		if !exists {
+			liveRate, err := getLiveRate(transfer.SourceCurrency, transfer.TargetCurrency)
+			if err != nil {
+				log.Printf("Error getting live rate for %s: %v", currencyPair, err)
+				continue
+			}
+			// FIX: getLiveRate returns a float64 directly, not a struct
+			currentRate = liveRate
+			rateCache[currencyPair] = currentRate
+			log.Printf("Fetched fresh rate for %s: %f", currencyPair, currentRate)
+		}
+
+		// 4. Perform the comparison logic
+		if currentRate > (transfer.Rate + margin) {
+			log.Printf("!!! ACTION REQUIRED | Transfer ID: %d | Live Rate: %f > Booked Rate: %f",
+				transfer.Id, currentRate, transfer.Rate)
+			// Placeholder for your cancel/re-create logic
+		} else {
+			log.Printf("|| NO ACTION NEEDED | Transfer ID: %d | Live Rate: %f || Booked Rate: %f ||",
+				transfer.Id, currentRate, transfer.Rate)
+		}
+	}
 }
 
 func getLiveRate(source string, target string) (float64, error) {
@@ -283,15 +291,6 @@ func callExternalAPI(method string, url string, reqBody []byte) (response interf
 	return
 }
 
-func findBestTransfer(transferList []Transfer) (bestTransfer Transfer) {
-	for i := range transferList {
-		if i == 0 || bestTransfer.Rate < transferList[i].Rate {
-			bestTransfer = transferList[i]
-		}
-	}
-	return
-}
-
 func getHost(envVar string) string {
 	switch strings.ToLower(envVar) {
 	case SANDBOX:
@@ -313,6 +312,7 @@ func getEnv(key, fallback string) string {
 
 type Transfer struct {
 	Id             uint64          `json:"id"`
+	Status         string          `json:"status"`
 	Profile        uint64          `json:"profile"`
 	TargetAccount  uint64          `json:"targetAccount"`
 	SourceAmount   float64         `json:"sourceAmount"`

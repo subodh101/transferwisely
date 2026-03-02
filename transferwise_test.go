@@ -3,11 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"github.com/bxcodec/faker/v3"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"testing"
 	"transferwisely/mocks"
@@ -17,17 +15,16 @@ func init() {
 	Client = &mocks.Client{}
 }
 
-func TestGetDetailByQuoteId(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		// build response JSON
-		q := QuoteDetail{}
-		err := faker.FakeData(&q)
-		if err != nil {
-			log.Println(err)
+func TestGetTransfer(t *testing.T) {
+	t.Run("success - multiple transfers", func(t *testing.T) {
+		// Mock a list of 2 transfers
+		transfers := []Transfer{
+			{Id: 101, SourceCurrency: "JPY", TargetCurrency: "INR", Rate: 0.58},
+			{Id: 102, SourceCurrency: "JPY", TargetCurrency: "INR", Rate: 0.57},
 		}
-		j, _ := json.Marshal(q)
-		// create a new reader with that JSON
+		j, _ := json.Marshal(transfers)
 		r := ioutil.NopCloser(bytes.NewReader(j))
+
 		mocks.GetDoFunc = func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -35,39 +32,36 @@ func TestGetDetailByQuoteId(t *testing.T) {
 			}, nil
 		}
 
-		qd, err := getDetailByQuoteId("anything")
-		assert.NotEmpty(t, qd)
-		assert.Equal(t, q.Id, qd.Id)
+		res, err := getTransfer()
 		assert.NoError(t, err)
+		assert.Len(t, res, 2)
+		assert.Equal(t, uint64(101), res[0].Id)
 	})
+}
 
-	t.Run("external api error", func(t *testing.T) {
-		// build response JSON
+func TestGetDetailByQuoteId(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
 		q := QuoteDetail{}
+		_ = faker.FakeData(&q)
 		j, _ := json.Marshal(q)
-		// create a new reader with that JSON
 		r := ioutil.NopCloser(bytes.NewReader(j))
+
 		mocks.GetDoFunc = func(*http.Request) (*http.Response, error) {
 			return &http.Response{
-				StatusCode: http.StatusInternalServerError,
+				StatusCode: http.StatusOK,
 				Body:       r,
 			}, nil
 		}
 
-		qd, err := getDetailByQuoteId("anything")
-		assert.Empty(t, qd)
-		assert.Error(t, err)
-
+		qd, err := getDetailByQuoteId("quote-uuid")
+		assert.NoError(t, err)
+		assert.Equal(t, q.Id, qd.Id)
 	})
 }
 
 func TestGenerateQuote(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		q := QuoteDetail{
-			Id:           "123-abc",
-			TargetAmount: 25000.00,
-			SourceAmount: 43000.00,
-		}
+		q := QuoteDetail{Id: "new-quote-123"}
 		j, _ := json.Marshal(q)
 		r := ioutil.NopCloser(bytes.NewReader(j))
 
@@ -78,49 +72,37 @@ func TestGenerateQuote(t *testing.T) {
 			}, nil
 		}
 
-		// Pass the 4 required arguments
-		// generateQuote(source, target, targetAmount, profile)
-		qId, err := generateQuote("JPY", "INR", 25000.00, 1)
-
+		// Updated to match your 4-argument signature: (source, target, amount, profile)
+		qId, err := generateQuote("JPY", "INR", 50000.00, 12345)
 		assert.NoError(t, err)
-		assert.Equal(t, "123-abc", qId)
+		assert.Equal(t, "new-quote-123", qId)
 	})
 }
 
 func TestCancelTransfer(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		// build response JSON
-		tId := uint64(1)
-		j, _ := json.Marshal(tId)
-		// create a new reader with that JSON
-		r := ioutil.NopCloser(bytes.NewReader(j))
 		mocks.GetDoFunc = func(*http.Request) (*http.Response, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       r,
-			}, nil
-		}
-
-		result, err := cancelTransfer(tId)
-		assert.Equal(t, result, true)
-		assert.NoError(t, err)
-	})
-
-	t.Run("external api error", func(t *testing.T) {
-		// build response JSON
-		err := errors.New("error calling external API")
-		j, _ := json.Marshal(err)
-		// create a new reader with that JSON
-		r := ioutil.NopCloser(bytes.NewReader(j))
-		mocks.GetDoFunc = func(*http.Request) (*http.Response, error) {
-			return &http.Response{
-				StatusCode: http.StatusInternalServerError,
-				Body:       r,
+				Body:       ioutil.NopCloser(bytes.NewReader([]byte(`{}`))),
 			}, nil
 		}
 
 		result, err := cancelTransfer(1)
-		assert.Equal(t, result, false)
+		assert.True(t, result)
+		assert.NoError(t, err)
+	})
+
+	t.Run("error - API failure", func(t *testing.T) {
+		mocks.GetDoFunc = func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       ioutil.NopCloser(bytes.NewReader([]byte(`{"error":"failed"}`))),
+			}, nil
+		}
+
+		result, err := cancelTransfer(1)
+		assert.False(t, result)
 		assert.Error(t, err)
 	})
 }

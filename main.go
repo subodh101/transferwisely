@@ -9,26 +9,29 @@ import (
 )
 
 func main() {
+	// intervalVar is defined and initialized in transferwise.go
+	// It uses the "INTERVAL" environment variable or defaults to "1"
 	interval, err := strconv.ParseUint(intervalVar, 10, 64)
 	if err != nil {
 		fmt.Printf("Invalid value for INTERVAL: %v\n", err)
 		return
 	}
 
-	// Use NewScheduler for v1 or the new v2 instantiation
+	// Initialize the scheduler using UTC time
 	s1 := gocron.NewScheduler(time.UTC)
 
-	_, err = s1.Every(interval).Minutes().Do(checkAndProcess)
+	// Schedule the checkAndProcess function to run every X minutes
+	// checkAndProcess is defined in transferwise.go and contains the API logic
+	_, err = s1.Every(int(interval)).Minutes().Do(checkAndProcess)
 	if err != nil {
 		fmt.Printf("Error scheduling task: %v\n", err)
 		return
 	}
 
-	// In newer versions, this is often StartAsync()
-	// or simply Start() depending on the minor version.
-	// If Start() is unexported, use StartAsync()
+	// Start the scheduler in the background
 	s1.StartAsync()
 
+	// Keep the application running by starting a basic HTTP server
 	fmt.Println("Starting batch server on port 3000")
 	_ = http.ListenAndServe(":3000", nil)
 }
