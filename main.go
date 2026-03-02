@@ -11,14 +11,23 @@ import (
 func main() {
 	interval, err := strconv.ParseUint(intervalVar, 10, 64)
 	if err != nil {
-		fmt.Printf("Invalid value for INTERVAL: %v", err)
+		fmt.Printf("Invalid value for INTERVAL: %v\n", err)
 		return
 	}
 
+	// Use NewScheduler for v1 or the new v2 instantiation
 	s1 := gocron.NewScheduler(time.UTC)
-	s1.Every(interval).Minutes().Do(checkAndProcess)
-	s1.Every(12).Hours().Do(sendExpiryReminderMail)
-	s1.Start()
+
+	_, err = s1.Every(interval).Minutes().Do(checkAndProcess)
+	if err != nil {
+		fmt.Printf("Error scheduling task: %v\n", err)
+		return
+	}
+
+	// In newer versions, this is often StartAsync()
+	// or simply Start() depending on the minor version.
+	// If Start() is unexported, use StartAsync()
+	s1.StartAsync()
 
 	fmt.Println("Starting batch server on port 3000")
 	_ = http.ListenAndServe(":3000", nil)

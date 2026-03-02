@@ -86,8 +86,12 @@ func checkAndProcess() {
 		return
 	}
 
-	log.Printf("|| NEW TRANSFER BOOKED || Transfer ID: %v | {%v} --> {%v} | Rate: %v |  Amount: %v ||",
-		newTransfer.Id, newTransfer.SourceCurrency, newTransfer.TargetCurrency, newTransfer.Rate, newTransfer.SourceAmount)
+	// Change this line in checkAndProcess:
+	log.Printf("|| NEW TRANSFER BOOKED || ID: %v | Target: %v %v | New Cost: %v %v (Saved: %v %v) ||",
+		newTransfer.Id,
+		newTransfer.TargetAmount, newTransfer.TargetCurrency,
+		newTransfer.SourceAmount, newTransfer.SourceCurrency,
+		transfer.SourceAmount-newTransfer.SourceAmount, newTransfer.SourceCurrency) // Use 'transfer'
 }
 
 func compareRates() (result bool, bookedTransfer Transfer, currentRate float64, err error) {
@@ -139,7 +143,10 @@ func getBookedTransfer() (Transfer, error) {
 	if err != nil {
 		return Transfer{}, fmt.Errorf("getBookedTransfer: %v", err)
 	}
+
+	// CRITICAL: We now save the TargetAmount (e.g., 25,000 INR)
 	bookedTransfer.SourceAmount = quoteDetail.SourceAmount
+	bookedTransfer.TargetAmount = quoteDetail.TargetAmount
 	bookedTransfer.Profile = quoteDetail.Profile
 
 	return bookedTransfer, nil
@@ -164,7 +171,7 @@ func getLiveRate(source string, target string) (float64, error) {
 }
 
 func createTransfer(oldTransfer Transfer) (Transfer, error) {
-	quoteId, err := generateQuote(oldTransfer.SourceCurrency, oldTransfer.TargetCurrency, oldTransfer.SourceAmount, oldTransfer.Profile)
+	quoteId, err := generateQuote(oldTransfer.SourceCurrency, oldTransfer.TargetCurrency, oldTransfer.TargetAmount, oldTransfer.Profile)
 	if err != nil {
 		return Transfer{}, fmt.Errorf("createTransfer: %v", err)
 	}
@@ -188,13 +195,14 @@ func createTransfer(oldTransfer Transfer) (Transfer, error) {
 	if err != nil {
 		return Transfer{}, fmt.Errorf("error decoding response: %v", err)
 	}
-	newTransfer.SourceAmount = oldTransfer.SourceAmount
 
 	cancelResult, err := cancelTransfer(oldTransfer.Id)
 	if !cancelResult || err != nil {
 		log.Println("Error deleting old transfer")
 	}
 
+	// For the log message, we can now show how much Source (JPY) was saved
+	newTransfer.TargetAmount = oldTransfer.TargetAmount
 	return newTransfer, nil
 }
 
@@ -210,11 +218,11 @@ func cancelTransfer(transferId uint64) (bool, error) {
 	return true, nil
 }
 
-func generateQuote(source string, target string, sourceAmount float64, profile uint64) (string, error) {
+func generateQuote(source string, target string, targetAmount float64, profile uint64) (string, error) {
 	quoteRequest := CreateQuoteRequest{
 		SourceCurrency: source,
 		TargetCurrency: target,
-		SourceAmount:   sourceAmount,
+		TargetAmount:   targetAmount,
 		Profile:        profile,
 	}
 
@@ -308,6 +316,7 @@ type Transfer struct {
 	Profile        uint64          `json:"profile"`
 	TargetAccount  uint64          `json:"targetAccount"`
 	SourceAmount   float64         `json:"sourceAmount"`
+	TargetAmount   float64         `json:"targetAmount"`
 	Rate           float64         `json:"rate"`
 	QuoteUuid      string          `json:"quote"`
 	SourceCurrency string          `json:"sourceCurrency"`
@@ -322,13 +331,13 @@ type TransferDetails struct {
 }
 
 type QuoteDetail struct {
-	Id                 string  `json:"id"`
-	SourceAmount       float64 `json:"sourceAmount"`
-	Rate               float64 `json:"rate"`
-	SourceCurrency     string  `json:"source"`
-	TargetCurrency     string  `json:"target"`
-	Profile            uint64  `json:"profile"`
-	RateExpirationTime string  `json:"rateExpirationTime"`
+	Id             string  `json:"id"`
+	SourceAmount   float64 `json:"sourceAmount"`
+	TargetAmount   float64 `json:"targetAmount"`
+	Rate           float64 `json:"rate"`
+	SourceCurrency string  `json:"source"`
+	TargetCurrency string  `json:"target"`
+	Profile        uint64  `json:"profile"`
 }
 
 type LiveRate struct {
@@ -345,6 +354,6 @@ type CreateTransferRequest struct {
 type CreateQuoteRequest struct {
 	SourceCurrency string  `json:"sourceCurrency"`
 	TargetCurrency string  `json:"targetCurrency"`
-	SourceAmount   float64 `json:"sourceAmount"`
+	TargetAmount   float64 `json:"targetAmount"`
 	Profile        uint64  `json:"profile"`
 }
