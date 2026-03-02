@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
-	"github.com/jordan-wright/email"
 	"github.com/mitchellh/mapstructure"
 	"log"
 	"net/http"
-	"net/smtp"
 	"net/url"
 	"os"
 	"strconv"
@@ -37,19 +35,6 @@ const (
 	fallbackMargin   = "0"
 )
 
-// SMTP mail server
-const (
-	smtpHost = "smtp.gmail.com"
-	smtpPort = "587"
-)
-
-// other mail related constants
-const (
-	reminderMailSubject = "Reminder: Your transfer is about to expire"
-	reminderMailBody    = "<h4>&#128184; The following transfer is going to expire on <b>%v</b></h4>" +
-		"<ul> <li>Transfer ID: %v </li> <li> {%v} --> {%v} </li> <li> Booked Rate: %v </li> <li> Amount: %v %v </li> </ul>"
-	expiryPeriodInHours = 36
-)
 
 // other constants
 const PRODUCTION = "production"
@@ -65,9 +50,6 @@ var hostVar = getHost(envVar)
 var apiTokenVar = getEnv("API_TOKEN", "")
 var marginVar = getEnv("MARGIN", fallbackMargin)
 var intervalVar = getEnv("INTERVAL", fallbackInterval)
-var toEmailVar = getEnv("TO_MAIL", "")
-var fromEmailVar = getEnv("FROM_MAIL", "")
-var mailPassVar = getEnv("MAIL_PASS", "")
 
 // HTTPClient interface
 type HTTPClient interface {
@@ -109,42 +91,6 @@ func checkAndProcess() {
 		newTransfer.Id, newTransfer.SourceCurrency, newTransfer.TargetCurrency, newTransfer.Rate, newTransfer.SourceAmount)
 }
 
-// Send reminder mail in case the best quote is about to expire
-func sendExpiryReminderMail() {
-	empty := Transfer{}
-	bookedTransfer, err := getBookedTransfer()
-	if err != nil || bookedTransfer == empty {
-		log.Printf("sendExpiryMail: %v", err)
-	}
-
-	quoteDetail, err := getDetailByQuoteId(bookedTransfer.QuoteUuid)
-	if err != nil {
-		log.Printf("sendExpiryMail: %v", err)
-	}
-
-	expiryTime, err := time.Parse(time.RFC3339, quoteDetail.RateExpirationTime)
-	if err != nil {
-		log.Printf("sendExpiryMail: %v", err)
-	}
-
-	if expiryTime.Sub(time.Now().UTC()).Hours() < expiryPeriodInHours {
-		body := fmt.Sprintf(
-			reminderMailBody,
-			expiryTime.Format("2006-01-02 15:04:05 UTC"),
-			bookedTransfer.Id,
-			bookedTransfer.SourceCurrency,
-			bookedTransfer.TargetCurrency,
-			bookedTransfer.Rate,
-			bookedTransfer.SourceCurrency,
-			bookedTransfer.SourceAmount,
-		)
-		err := sendMail(reminderMailSubject, []byte(body))
-		if err != nil {
-			log.Printf("sendExpiryMail: %v", err)
-		}
-	}
-	return
-}
 
 func compareRates() (result bool, bookedTransfer Transfer, currentRate float64, err error) {
 	empty := Transfer{}
@@ -340,18 +286,6 @@ func findBestTransfer(transferList []Transfer) (bestTransfer Transfer) {
 	return
 }
 
-func sendMail(subject string, body []byte) (err error) {
-	if toEmailVar == "" || fromEmailVar == "" || mailPassVar == "" {
-		return fmt.Errorf("error: env vars TO_MAIL, FROM_MAIL, MAIL_PASS not found")
-	}
-	e := email.NewEmail()
-	e.From = fmt.Sprintf(" Transferwisely <%s>", fromEmailVar)
-	e.To = []string{toEmailVar}
-	e.Subject = subject
-	e.HTML = body
-	err = e.Send(smtpHost+":"+smtpPort, smtp.PlainAuth("", fromEmailVar, mailPassVar, smtpHost))
-	return
-}
 
 func getHost(envVar string) string {
 	switch strings.ToLower(envVar) {
