@@ -35,7 +35,6 @@ const (
 	fallbackMargin   = "0"
 )
 
-
 // other constants
 const PRODUCTION = "production"
 const SANDBOX = "sandbox"
@@ -90,7 +89,6 @@ func checkAndProcess() {
 	log.Printf("|| NEW TRANSFER BOOKED || Transfer ID: %v | {%v} --> {%v} | Rate: %v |  Amount: %v ||",
 		newTransfer.Id, newTransfer.SourceCurrency, newTransfer.TargetCurrency, newTransfer.Rate, newTransfer.SourceAmount)
 }
-
 
 func compareRates() (result bool, bookedTransfer Transfer, currentRate float64, err error) {
 	empty := Transfer{}
@@ -285,7 +283,6 @@ func findBestTransfer(transferList []Transfer) (bestTransfer Transfer) {
 	}
 	return
 }
-
 
 func getHost(envVar string) string {
 	switch strings.ToLower(envVar) {
